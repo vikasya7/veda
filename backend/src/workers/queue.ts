@@ -6,7 +6,7 @@ export interface GenerationJobPayload {
     uploadedFileUrl?:string;
 }
 
-export const GENERATION_QUEUE = "assessment:generation";
+export const GENERATION_QUEUE = "assessment-generation";
 
 let queue: Queue<GenerationJobPayload>;
 

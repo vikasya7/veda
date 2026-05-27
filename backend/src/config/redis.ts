@@ -23,3 +23,8 @@ export const bullMQConnection={
     port:Number(process.env.REDIS_PORT),
     maxRetriesPerRequest: null
 }
+
+export async function connectRedis():Promise<void> {
+    await redis.ping()
+    console.log("[Redis] Ping successful");
+}
