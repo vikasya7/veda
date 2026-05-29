@@ -138,3 +138,20 @@ startWorker().catch((err) => {
   process.exit(1);
 });
 
+import express from "express";
+
+const app = express();
+
+app.get("/", (_req, res) => {
+  res.send("Worker is running");
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
+const PORT = Number(process.env.PORT) || 10000;
+
+app.listen(PORT, () => {
+  console.log(`[Worker] Health server listening on port ${PORT}`);
+});
