@@ -21,81 +21,74 @@ export interface WsPayload {
 }
 
 // room map assignment-->clientIds
-const rooms=new Map<string,Set<WebSocket>>();
-let wss:WebSocketServer;
+// room map assignment --> clientIds
+const rooms = new Map<string, Set<WebSocket>>();
 
-export function initWebSocketServer(server:Server):WebSocketServer {
-     wss=new WebSocketServer({server,path:"/ws"});
-     wss.on("connection",(ws:WebSocket,req:IncomingMessage)=>{
-        // client connects
-       const url = new URL(req.url || "", "http://localhost");
-       const assignmentId=url.searchParams.get("assignmentId")
+// ✅ Cache last payload per room so late joiners get current state
+const roomState = new Map<string, WsPayload>();
 
+let wss: WebSocketServer;
 
-       if(!assignmentId){
-         ws.close(1008, "assignmentId query param required");
-         return;
-       }
-       // join room
-       if(!rooms.has(assignmentId)){
-         rooms.set(assignmentId,new Set())
-       }
-       rooms.get(assignmentId)!.add(ws)
+// src/config/websocket.ts — add replay on connect
 
-        console.log(
-      `[WS] Client joined room: ${assignmentId} | room size: ${rooms.get(assignmentId)!.size}`
-        );
+import { redis } from "../config/redis"; // add this import
 
-        safeSend(ws,{
-            event:"connected",
-            assignmentId,
-            message: "Listening for updates...",
-        })
-        // leave room on disconnect
-        ws.on("close",()=>{
-            rooms.get(assignmentId)?.delete(ws);
+export function initWebSocketServer(server: Server): WebSocketServer {
+  wss = new WebSocketServer({ server, path: "/ws" });
 
-            // clean up empty rooms
-            if(rooms.get(assignmentId)?.size===0){
-                rooms.delete(assignmentId)
-            }
-            console.log(`[WS] Client left room: ${assignmentId}`);
-        })
-        ws.on("error", (err) => {
-          console.error(`[WS] Socket error in room ${assignmentId}:`, err.message);
-       });
+  wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
+    const url          = new URL(req.url || "", "http://localhost");
+    const assignmentId = url.searchParams.get("assignmentId");
 
-      
+    if (!assignmentId) { ws.close(1008, "assignmentId required"); return; }
 
-    })
-     wss.on("error", (err) => {
-          console.error("[WS] Server error:", err.message);
+    if (!rooms.has(assignmentId)) rooms.set(assignmentId, new Set());
+    rooms.get(assignmentId)!.add(ws);
+
+    // ── Replay last known state to late joiner ──────────────────────────────
+    try {
+      const lastState = await redis.get(`ws:last:${assignmentId}`);
+      if (lastState) {
+        const payload = JSON.parse(lastState);
+        console.log(`[WS] Replaying last state to late joiner: ${payload.event} ${payload.progress}`);
+        safeSend(ws, payload);
+      }
+    } catch {}
+
+    ws.on("close", () => {
+      rooms.get(assignmentId)?.delete(ws);
+      if (rooms.get(assignmentId)?.size === 0) rooms.delete(assignmentId);
     });
-    console.log("[WS] WebSocket server initialized on path /ws");
-    return wss;
+
+    ws.on("error", (err) => console.error(`[WS] Error:`, err.message));
+    safeSend(ws, { event: "connected", assignmentId, message: "Listening..." });
+  });
+
+  return wss;
 }
 
-
 // broadcast to all clients in room
+export function broadcast(assignmentId: string, payload: WsPayload): void {
+  // ✅ Always cache latest state regardless of whether clients are connected
+  roomState.set(assignmentId, payload);
 
-export function broadcast(assignmentId:string,payload:WsPayload):void {
-    const room=rooms.get(assignmentId)
+  const room = rooms.get(assignmentId);
 
-    if(!room || room.size===0){
-        // no clienyts connected
-          console.log(`[WS] No clients in room ${assignmentId}, skipping broadcast`);
-          return;
+  if (!room || room.size === 0) {
+    console.log(`[WS] No clients in room ${assignmentId}, state cached for late joiner`);
+    return;
+  }
+
+  let sent = 0;
+  for (const client of room) {
+    if (client.readyState === WebSocket.OPEN) {
+      safeSend(client, payload);
+      sent++;
     }
-
-    const message=JSON.stringify(payload);
-    let sent=0;
-    for (const client of room){
-        if(client.readyState===WebSocket.OPEN){
-            safeSend(client,payload);
-            sent++;
-        }
-    }
-    console.log(`[WS] Broadcast to room ${assignmentId}: ${sent}/${room.size} clients | event: ${payload.event}`);
+  }
+  console.log(
+    `[WS] Broadcast to room ${assignmentId}: ${sent}/${room.size} clients | event: ${payload.event} | progress: ${payload.progress ?? "-"}`
+  );
 }
 
 function safeSend(ws: WebSocket, payload: WsPayload): void {

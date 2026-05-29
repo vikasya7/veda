@@ -51,82 +51,48 @@ JSON Schema (follow exactly):
 
 // ─── Main prompt builder ───────────────────────────────────────────────────────
 
-export function buildUserPrompt(
-  assignment: IAssignment,
-  fileContext?: string
-): string {
-  const {
-    title,
-    subject,
-    grade,
-    totalQuestions,
-    marksPerQuestion,
-    questionTypes,
-    difficultyDistribution,
-    instructions,
-  } = assignment;
+// src/services/promptBuilder.ts — update buildUserPrompt
 
-  const { easy, medium, hard } = difficultyDistribution;
-  const totalMarks = totalQuestions * marksPerQuestion;
+export function buildUserPrompt(assignment: IAssignment, fileContext?: string): string {
+  const { easy, medium, hard } = assignment.difficultyDistribution;
+  const totalMarks = assignment.totalQuestions * assignment.marksPerQuestion;
 
-  // ── Difficulty breakdown lines ─────────────────────────────────────────────
-  const difficultyLines = [
-    easy   > 0 ? `  - Easy:   ${easy} question(s)`   : null,
-    medium > 0 ? `  - Medium: ${medium} question(s)` : null,
-    hard   > 0 ? `  - Hard:   ${hard} question(s)`   : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  // ── Build per-question spec so LLM can't guess ────────────────────────────
+  const questionSpec = assignment.questionTypes.map((type) => {
+    const label =
+      type === "mcq"        ? "Multiple Choice"  :
+      type === "short"      ? "Short Answer"      :
+      type === "long"       ? "Long Answer"       :
+      type === "true_false" ? "True/False"        : type;
 
-  // ── Section grouping hint ──────────────────────────────────────────────────
-  const sectionHint = buildSectionHint(questionTypes);
+    return `  - ${label}: each question = EXACTLY ${assignment.marksPerQuestion} mark(s)`;
+  }).join("\n");
 
-  // ── Base prompt ───────────────────────────────────────────────────────────
-  let prompt = `Generate a question paper with these exact specifications:
+  return `Generate a question paper with EXACTLY these specifications:
 
-ASSIGNMENT DETAILS:
-  Title:            ${title}
-  Subject:          ${subject}
-  Grade / Class:    ${grade}
-  Total Questions:  ${totalQuestions}
-  Marks/Question:   ${marksPerQuestion}
-  Total Marks:      ${totalMarks}
+SUBJECT: ${assignment.subject}
+GRADE: ${assignment.grade}
+TOTAL QUESTIONS: ${assignment.totalQuestions}
+MARKS PER QUESTION: ${assignment.marksPerQuestion} — EVERY question must have exactly ${assignment.marksPerQuestion} mark(s). No exceptions.
+TOTAL MARKS: ${totalMarks} — must equal ${assignment.totalQuestions} × ${assignment.marksPerQuestion}
 
-QUESTION TYPES TO USE:
-  ${questionTypes.join(", ")}
+QUESTION TYPES AND MARKS:
+${questionSpec}
 
-DIFFICULTY DISTRIBUTION (follow exactly):
-${difficultyLines}
+DIFFICULTY DISTRIBUTION (exact counts, no deviation):
+  - Easy:   ${easy} question(s)
+  - Medium: ${medium} question(s)
+  - Hard:   ${hard} question(s)
 
-SECTION GROUPING:
-${sectionHint}
+ADDITIONAL INSTRUCTIONS: ${assignment.instructions || "None"}
+${fileContext ? `\nCONTEXT FROM UPLOADED FILE:\n${fileContext.slice(0, 3000)}` : ""}
 
-ADDITIONAL INSTRUCTIONS FROM TEACHER:
-  ${instructions || "None provided."}
-`;
-
-  // ── Append file context if uploaded ───────────────────────────────────────
-  if (fileContext && fileContext.trim().length > 0) {
-    prompt += `
-CONTEXT FROM UPLOADED MATERIAL:
-Use the following content to generate relevant, accurate questions.
-Do not copy text verbatim — use it as the knowledge source.
----
-${fileContext.slice(0, 3000)}
----`;
-  }
-
-  // ── Final reminder ────────────────────────────────────────────────────────
-  prompt += `
-
-REMINDER:
-- Return ONLY valid JSON. No prose, no markdown fences.
-- generatedAt must be: "${new Date().toISOString()}"
-- totalMarks must be: ${totalMarks}
-- totalQuestions must be: ${totalQuestions}
-- Question ids must be sequential: q1, q2, q3...`;
-
-  return prompt;
+CRITICAL RULES:
+1. Every single question.marks field must be ${assignment.marksPerQuestion}
+2. Total marks across all sections must be ${totalMarks}
+3. Difficulty counts must match exactly
+4. Return ONLY valid JSON — no prose, no markdown fences
+5. generatedAt: "${new Date().toISOString()}"`;
 }
 
 // ─── Correction prompt — used when LLM returns invalid JSON ──────────────────
